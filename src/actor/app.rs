@@ -491,10 +491,13 @@ impl State {
                 for elem in window_elems.iter() {
                     let elem = elem.clone();
                     if let Ok(id) = self.id(&elem) {
-                        known_visible.push(id);
                         match WindowInfo::from_ax_element(&elem, None) {
-                            Ok((info, _)) => {
-                                new.push((id, info));
+                            Ok((mut info, _)) => {
+                                if !self.should_ignore_window_info(&info) {
+                                    self.normalize_window_info(&elem, &mut info);
+                                    known_visible.push(id);
+                                    new.push((id, info));
+                                }
                             }
                             Err(err) => {
                                 trace!(
@@ -509,6 +512,7 @@ impl State {
                     let Some((info, wid, _)) = self.register_window(elem, None) else {
                         continue;
                     };
+                    known_visible.push(wid);
                     new.push((wid, info));
                 }
                 self.send_event(Event::WindowsDiscovered {
@@ -731,20 +735,58 @@ impl State {
                 _ = self.on_activation_changed();
             }
             kAXMainWindowChangedNotification => {
+                debug!(
+                    pid = self.pid,
+                    bundle_id = ?self.bundle_id,
+                    tracked_windows = self.windows.len(),
+                    current_main_window = ?self.main_window,
+                    "RIFT_IBKR_TRACE app notif=AXMainWindowChanged"
+                );
                 // NOTE(acsandmann):
                 // because of apps like firefox that send delayed(or dont send at all) axuielementdestroyed/windowserverdisappeared
                 // this is a fallback to ensure we handle windows being closed
                 self.remove_stale_windows();
-                self.on_main_window_changed(None, false);
+                // Some apps (notably Java-based ones like IBKR) can report a new
+                // main window before AXWindowCreated or before we have fully
+                // registered it. Treat main-window changes as a valid discovery
+                // path so the new primary window gets tracked immediately.
+                self.on_main_window_changed(None, true);
             }
             kAXWindowCreatedNotification => {
-                if self.id(&elem).is_ok() {
+                let already_known = self.id(&elem).is_ok();
+                debug!(
+                    pid = self.pid,
+                    bundle_id = ?self.bundle_id,
+                    already_known,
+                    tracked_windows = self.windows.len(),
+                    "RIFT_IBKR_TRACE app notif=AXWindowCreated"
+                );
+                if already_known {
                     return;
                 }
                 let Some((window, wid, window_server_info)) = self.register_window(elem, None)
                 else {
+                    debug!(
+                        pid = self.pid,
+                        bundle_id = ?self.bundle_id,
+                        tracked_windows = self.windows.len(),
+                        "RIFT_IBKR_TRACE app notif=AXWindowCreated register_window=none"
+                    );
                     return;
                 };
+                debug!(
+                    pid = self.pid,
+                    ?wid,
+                    wsid = ?window.sys_id,
+                    title = %window.title,
+                    role = ?window.ax_role,
+                    subrole = ?window.ax_subrole,
+                    is_standard = window.is_standard,
+                    is_root = window.is_root,
+                    is_resizable = window.is_resizable,
+                    is_minimized = window.is_minimized,
+                    "RIFT_IBKR_TRACE app notif=AXWindowCreated register_window=some"
+                );
                 let window_server_info = window_server_info
                     .or_else(|| window.sys_id.and_then(window_server::get_window));
                 self.send_event(Event::WindowCreated(
@@ -997,8 +1039,22 @@ impl State {
         };
 
         let wid = match self.id(&elem).ok() {
-            Some(wid) => wid,
+            Some(wid) => {
+                debug!(
+                    pid = self.pid,
+                    ?wid,
+                    allow_register,
+                    "RIFT_IBKR_TRACE app main_window_changed known=true"
+                );
+                wid
+            }
             None => {
+                debug!(
+                    pid = self.pid,
+                    allow_register,
+                    tracked_windows = self.windows.len(),
+                    "RIFT_IBKR_TRACE app main_window_changed known=false"
+                );
                 if !allow_register {
                     info!(?self.pid, "Got MainWindowChanged on unknown window; clearing main window");
                     if self.main_window.take().is_some() {
@@ -1011,9 +1067,22 @@ impl State {
                     return None;
                 }
                 let Some((info, wid, window_server_info)) = self.register_window(elem, None) else {
-                    debug!(?self.pid, "Got MainWindowChanged on unknown window");
+                    debug!(?self.pid, "RIFT_IBKR_TRACE app main_window_changed register_window=none");
                     return None;
                 };
+                debug!(
+                    pid = self.pid,
+                    ?wid,
+                    wsid = ?info.sys_id,
+                    title = %info.title,
+                    role = ?info.ax_role,
+                    subrole = ?info.ax_subrole,
+                    is_standard = info.is_standard,
+                    is_root = info.is_root,
+                    is_resizable = info.is_resizable,
+                    is_minimized = info.is_minimized,
+                    "RIFT_IBKR_TRACE app main_window_changed register_window=some"
+                );
                 let window_server_info =
                     window_server_info.or_else(|| info.sys_id.and_then(window_server::get_window));
                 self.send_event(Event::WindowCreated(
@@ -1030,6 +1099,12 @@ impl State {
             return Some(wid);
         }
         self.main_window = Some(wid);
+        debug!(
+            pid = self.pid,
+            ?wid,
+            quiet_if = ?quiet_if,
+            "RIFT_IBKR_TRACE app main_window_changed set_main_window"
+        );
         let quiet = match quiet_if {
             Some(id) if id == wid => Quiet::Yes,
             _ => Quiet::No,
@@ -1140,45 +1215,11 @@ impl State {
             return None;
         };
 
-        let bundle_is_widget = info.bundle_id.as_deref().map_or(false, |id| {
-            let id_lower = id.to_ascii_lowercase();
-            id_lower.ends_with(".widget") || id_lower.contains(".widget.")
-        });
-
-        let path_is_extension = info.path.as_ref().and_then(|p| p.to_str()).map_or(false, |path| {
-            let lower = path.to_ascii_lowercase();
-            lower.contains(".appex/") || lower.ends_with(".appex")
-        });
-
-        if bundle_is_widget || path_is_extension {
-            trace!(bundle_id = ?info.bundle_id, path = ?info.path, "Ignoring widget/app-extension window");
+        if self.should_ignore_window_info(&info) {
             return None;
         }
 
-        if info.ax_role.as_deref() == Some("AXPopover") || info.ax_role.as_deref() == Some("AXMenu")
-        //|| info.ax_subrole.as_deref() == Some("AXUnknown")
-        {
-            trace!(
-                role = ?info.ax_role,
-                subrole = ?info.ax_subrole,
-                "Ignoring non-standard AX window"
-            );
-            return None;
-        }
-
-        // TODO: improve this heuristic using ideas from AeroSpace(maybe implement a similar testing architecture based on ax dumps)
-        if (self.bundle_id.as_deref() == Some("com.googlecode.iterm2")
-            || self.bundle_id.as_deref() == Some("com.apple.TextInputUI.xpc.CursorUIViewService"))
-            && elem.attribute("AXTitleUIElement").is_err()
-        {
-            info.is_standard = false;
-        }
-
-        if let Some(wsid) = info.sys_id {
-            info.is_root = window_server::window_parent(wsid).is_none();
-        } else {
-            info.is_root = true;
-        }
+        self.normalize_window_info(&elem, &mut info);
 
         let window_server_id = info.sys_id.filter(|sid| sid.as_nonzero().is_some()).or_else(|| {
             WindowServerId::try_from(&elem)
@@ -1237,6 +1278,85 @@ impl State {
                 }
             }
             true
+        }
+    }
+
+    fn should_ignore_window_info(&self, info: &WindowInfo) -> bool {
+        let bundle_is_widget = info.bundle_id.as_deref().map_or(false, |id| {
+            let id_lower = id.to_ascii_lowercase();
+            id_lower.ends_with(".widget") || id_lower.contains(".widget.")
+        });
+
+        let path_is_extension = info.path.as_ref().and_then(|p| p.to_str()).map_or(false, |path| {
+            let lower = path.to_ascii_lowercase();
+            lower.contains(".appex/") || lower.ends_with(".appex")
+        });
+
+        if bundle_is_widget || path_is_extension {
+            trace!(bundle_id = ?info.bundle_id, path = ?info.path, "Ignoring widget/app-extension window");
+            return true;
+        }
+
+        if info.ax_role.as_deref() == Some("AXPopover") || info.ax_role.as_deref() == Some("AXMenu")
+        {
+            trace!(
+                role = ?info.ax_role,
+                subrole = ?info.ax_subrole,
+                "Ignoring non-standard AX window"
+            );
+            return true;
+        }
+
+        false
+    }
+
+    fn normalize_window_info(&self, elem: &AXUIElement, info: &mut WindowInfo) {
+        // TODO: improve this heuristic using ideas from AeroSpace(maybe implement a similar testing architecture based on ax dumps)
+        if (self.bundle_id.as_deref() == Some("com.googlecode.iterm2")
+            || self.bundle_id.as_deref() == Some("com.apple.TextInputUI.xpc.CursorUIViewService"))
+            && elem.attribute("AXTitleUIElement").is_err()
+        {
+            info.is_standard = false;
+        }
+
+        if let Some(wsid) = info.sys_id {
+            info.is_root = window_server::window_parent(wsid).is_none();
+
+            if self.bundle_id.as_deref() == Some("com.google.Chrome")
+                && !info.is_standard
+                && !info.is_resizable
+            {
+                trace!(
+                    ?wsid,
+                    title = %info.title,
+                    role = ?info.ax_role,
+                    subrole = ?info.ax_subrole,
+                    "Ignoring Chrome non-standard non-resizable window by marking it non-root"
+                );
+                info.is_root = false;
+                return;
+            }
+
+            if !info.is_root && !info.is_standard {
+                // Non-standard subrole windows (e.g. Java/Swing) may report a
+                // parent because the toolkit creates a container window. If
+                // that parent is not on-screen (frame is zero-sized or not
+                // visible in the window list), treat this as a root window so
+                // it can be managed.
+                if let Some(parent_id) = window_server::window_parent(wsid) {
+                    if let Some(parent_info) = window_server::get_window(parent_id) {
+                        let on_screen = parent_info.frame.size.width > 1.0
+                            && parent_info.frame.size.height > 1.0;
+                        if !on_screen {
+                            info.is_root = true;
+                        }
+                    } else {
+                        info.is_root = true;
+                    }
+                }
+            }
+        } else {
+            info.is_root = true;
         }
     }
 

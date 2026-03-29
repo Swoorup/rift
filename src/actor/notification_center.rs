@@ -382,7 +382,7 @@ impl NotificationCenterInner {
 
         let fingerprint = Self::fingerprint_displays(&screens);
         let mut state = ivars.display_topology_state.borrow_mut();
-        let hits = match state.as_mut() {
+        let hits: u8 = match state.as_mut() {
             Some(existing) if existing.fingerprint == fingerprint => {
                 existing.hits = existing.hits.saturating_add(1);
                 existing.hits

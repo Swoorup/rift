@@ -1,4 +1,4 @@
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 use crate::actor::app::{AppInfo, WindowId, WindowInfo, pid_t};
 use crate::actor::reactor::{Event, LayoutEvent, Reactor, WindowFilter, WindowState, utils};
@@ -41,10 +41,14 @@ impl WindowDiscoveryHandler {
         let (stale_windows, pending_refresh) =
             Self::identify_stale_windows(reactor, pid, &known_visible);
         Self::cleanup_stale_windows(reactor, pid, stale_windows, pending_refresh);
+        let has_new_windows = !new.is_empty();
         let new_windows = Self::process_window_list(reactor, new, &app_info);
         Self::update_window_states(reactor, new_windows, &app_info);
 
         Self::emit_layout_events(reactor, pid, &known_visible, &app_info);
+        if has_new_windows {
+            let _ = reactor.update_layout_or_warn_with(false, false, "after windows discovered");
+        }
     }
 
     fn sync_window_server_id_mapping(
@@ -240,14 +244,16 @@ impl WindowDiscoveryHandler {
                         .get(wid)
                         .and_then(|window| window.info.sys_id);
                     Self::sync_window_server_id_mapping(reactor, *wid, old_sys_id, info.sys_id);
-                    let manageable = utils::compute_window_manageability(
-                        info.sys_id,
-                        info.is_minimized,
-                        info.is_ax_window,
-                        info.is_root,
-                        info.is_standard,
+                    let manageable = utils::compute_window_info_manageability(
+                        info,
                         &reactor.window_server_info_manager.window_server_info,
                     );
+                    let was_manageable = reactor
+                        .window_manager
+                        .windows
+                        .get(wid)
+                        .map(|window| window.is_manageable)
+                        .unwrap_or(false);
                     if let Some(existing) = reactor.window_manager.windows.get_mut(wid) {
                         existing.info.title = info.title.clone();
                         if info.frame.size.width != 0.0 || info.frame.size.height != 0.0 {
@@ -267,14 +273,25 @@ impl WindowDiscoveryHandler {
                         existing.info.ax_subrole = info.ax_subrole.clone();
                         existing.is_manageable = manageable;
                     }
+                    debug!(
+                        ?wid,
+                        wsid = ?info.sys_id,
+                        was_manageable,
+                        manageable,
+                        title = %info.title,
+                        role = ?info.ax_role,
+                        subrole = ?info.ax_subrole,
+                        is_standard = info.is_standard,
+                        is_root = info.is_root,
+                        is_resizable = info.is_resizable,
+                        is_minimized = info.is_minimized,
+                        "RIFT_IBKR_TRACE reactor event=WindowsDiscovered existing_update=recent"
+                    );
+                    reactor.sync_window_manageability_transition(*wid, was_manageable, manageable);
                 } else {
                     let mut state: WindowState = WindowState::from((*info).clone());
-                    let manageable = utils::compute_window_manageability(
-                        state.info.sys_id,
-                        state.info.is_minimized,
-                        state.info.is_ax_window,
-                        state.info.is_root,
-                        state.info.is_standard,
+                    let manageable = utils::compute_window_info_manageability(
+                        &state.info,
                         &reactor.window_server_info_manager.window_server_info,
                     );
                     state.is_manageable = manageable;
@@ -291,14 +308,16 @@ impl WindowDiscoveryHandler {
                 let old_sys_id =
                     reactor.window_manager.windows.get(&wid).and_then(|window| window.info.sys_id);
                 Self::sync_window_server_id_mapping(reactor, wid, old_sys_id, info.sys_id);
-                let manageable = utils::compute_window_manageability(
-                    info.sys_id,
-                    info.is_minimized,
-                    info.is_ax_window,
-                    info.is_root,
-                    info.is_standard,
+                let manageable = utils::compute_window_info_manageability(
+                    &info,
                     &reactor.window_server_info_manager.window_server_info,
                 );
+                let was_manageable = reactor
+                    .window_manager
+                    .windows
+                    .get(&wid)
+                    .map(|window| window.is_manageable)
+                    .unwrap_or(false);
                 if let Some(existing) = reactor.window_manager.windows.get_mut(&wid) {
                     existing.info.title = info.title.clone();
                     if info.frame.size.width != 0.0 || info.frame.size.height != 0.0 {
@@ -317,6 +336,21 @@ impl WindowDiscoveryHandler {
                     existing.info.ax_subrole = info.ax_subrole.clone();
                     existing.is_manageable = manageable;
                 }
+                debug!(
+                    ?wid,
+                    wsid = ?info.sys_id,
+                    was_manageable,
+                    manageable,
+                    title = %info.title,
+                    role = ?info.ax_role,
+                    subrole = ?info.ax_subrole,
+                    is_standard = info.is_standard,
+                    is_root = info.is_root,
+                    is_resizable = info.is_resizable,
+                    is_minimized = info.is_minimized,
+                    "RIFT_IBKR_TRACE reactor event=WindowsDiscovered existing_update=normal"
+                );
+                reactor.sync_window_manageability_transition(wid, was_manageable, manageable);
             } else {
                 Self::sync_window_server_id_mapping(reactor, wid, None, info.sys_id);
                 new_windows.push((wid, info));
@@ -335,12 +369,8 @@ impl WindowDiscoveryHandler {
         // Update or insert window states
         for (wid, info) in new_windows {
             let mut state: WindowState = info.into();
-            let manageable = utils::compute_window_manageability(
-                state.info.sys_id,
-                state.info.is_minimized,
-                state.info.is_ax_window,
-                state.info.is_root,
-                state.info.is_standard,
+            let manageable = utils::compute_window_info_manageability(
+                &state.info,
                 &reactor.window_server_info_manager.window_server_info,
             );
             state.is_manageable = manageable;

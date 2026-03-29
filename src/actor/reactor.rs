@@ -1183,32 +1183,23 @@ impl Reactor {
             self.window_server_info_manager.window_server_info.insert(info.id, *info);
 
             if let Some(wid) = self.window_manager.window_ids.get(&info.id).copied() {
-                let (server_id, is_minimized, is_ax_window, is_ax_root, is_ax_standard) =
+                let (window_info, was_manageable) =
                     if let Some(window) = self.window_manager.windows.get_mut(&wid) {
                         if info.layer == 0 {
                             window.frame_monotonic = info.frame;
                         }
-                        (
-                            window.info.sys_id,
-                            window.info.is_minimized,
-                            window.info.is_ax_window,
-                            window.info.is_root,
-                            window.info.is_standard,
-                        )
+                        (window.info.clone(), window.is_manageable)
                     } else {
                         continue;
                     };
-                let manageable = utils::compute_window_manageability(
-                    server_id,
-                    is_minimized,
-                    is_ax_window,
-                    is_ax_root,
-                    is_ax_standard,
+                let manageable = utils::compute_window_info_manageability(
+                    &window_info,
                     &self.window_server_info_manager.window_server_info,
                 );
                 if let Some(window) = self.window_manager.windows.get_mut(&wid) {
                     window.is_manageable = manageable;
                 }
+                self.sync_window_manageability_transition(wid, was_manageable, manageable);
             }
         }
     }
@@ -1893,6 +1884,68 @@ impl Reactor {
         true
     }
 
+    pub(crate) fn sync_window_manageability_transition(
+        &mut self,
+        wid: WindowId,
+        was_manageable: bool,
+        is_manageable: bool,
+    ) {
+        if was_manageable == is_manageable {
+            return;
+        }
+
+        let (space, wsid, title, is_standard, is_root, is_resizable, is_minimized) = {
+            let Some(window) = self.window_manager.windows.get(&wid) else {
+                return;
+            };
+            (
+                self.best_space_for_window_state(window),
+                window.info.sys_id,
+                window.info.title.clone(),
+                window.info.is_standard,
+                window.info.is_root,
+                window.info.is_resizable,
+                window.info.is_minimized,
+            )
+        };
+
+        debug!(
+            ?wid,
+            wsid = ?wsid,
+            was_manageable,
+            is_manageable,
+            chosen_space = ?space,
+            active_space = space.map(|s| self.is_space_active(s)),
+            title = %title,
+            is_standard,
+            is_root,
+            is_resizable,
+            is_minimized,
+            "RIFT_IBKR_TRACE reactor manageability_transition"
+        );
+
+        if !is_manageable {
+            self.send_layout_event(LayoutEvent::WindowRemoved(wid));
+            return;
+        }
+
+        let Some(space) = space else {
+            return;
+        };
+        if !self.is_space_active(space) {
+            return;
+        }
+
+        if let Some(app_info) = self.app_manager.apps.get(&wid.pid).map(|app| app.info.clone()) {
+            if let Some(wsid) = wsid {
+                self.app_manager.mark_wsids_recent(std::iter::once(wsid));
+            }
+            self.process_windows_for_app_rules(wid.pid, vec![wid], app_info);
+        }
+
+        self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
+    }
+
     fn process_windows_for_app_rules(
         &mut self,
         pid: pid_t,
@@ -2329,14 +2382,30 @@ impl Reactor {
             && let Some(state) = self.window_manager.windows.get(&wid)
             && let Some(wsid) = state.info.sys_id
         {
+            debug!(
+                ?wid,
+                ?wsid,
+                original_focus = ?original_focus,
+                require_visible_focus,
+                is_minimized = state.info.is_minimized,
+                chosen_space = ?self.best_space_for_window_state(state),
+                active_space = self
+                    .best_space_for_window_state(state)
+                    .map(|space| self.is_space_active(space)),
+                raise_windows_len = raise_windows.len(),
+                title = %state.info.title,
+                "RIFT_IBKR_TRACE reactor layout_response pre_filter"
+            );
             if require_visible_focus && state.info.is_minimized {
                 tracing::debug!(?wid, ?wsid, "Dropping focus request: window is minimized");
+                debug!(?wid, ?wsid, "RIFT_IBKR_TRACE reactor layout_response drop=minimized");
                 focus_window = None;
             } else if !self
                 .best_space_for_window_state(state)
                 .is_some_and(|space| self.is_space_active(space))
             {
                 tracing::debug!(?wid, ?wsid, "Dropping focus request: window not on active space");
+                debug!(?wid, ?wsid, "RIFT_IBKR_TRACE reactor layout_response drop=inactive_space");
                 focus_window = None;
             }
         }
@@ -2400,6 +2469,16 @@ impl Reactor {
             };
             (wid, warp)
         });
+
+        debug!(
+            original_focus = ?original_focus,
+            final_focus_window = ?focus_window,
+            raise_windows = ?raise_windows,
+            grouped_raise_batches = windows_by_app_and_screen.len(),
+            focus_quiet = ?focus_quiet,
+            workspace_switch_state = ?self.workspace_switch_manager.workspace_switch_state,
+            "RIFT_IBKR_TRACE reactor layout_response raise_request"
+        );
 
         let msg = raise_manager::Event::RaiseRequest(RaiseRequest {
             raise_windows: windows_by_app_and_screen.into_values().collect(),

@@ -35,12 +35,8 @@ impl WindowEventHandler {
 
         let frame = window.frame;
         let mut window_state: WindowState = window.into();
-        let is_manageable = utils::compute_window_manageability(
-            window_state.info.sys_id,
-            window_state.info.is_minimized,
-            window_state.info.is_ax_window,
-            window_state.info.is_root,
-            window_state.info.is_standard,
+        let is_manageable = utils::compute_window_info_manageability(
+            &window_state.info,
             &reactor.window_server_info_manager.window_server_info,
         );
         window_state.is_manageable = is_manageable;
@@ -56,6 +52,20 @@ impl WindowEventHandler {
         if let Some(wsid) = server_id {
             reactor.window_manager.visible_windows.insert(wsid);
         }
+        debug!(
+            ?wid,
+            wsid = ?server_id,
+            title = %window_state.info.title,
+            role = ?window_state.info.ax_role,
+            subrole = ?window_state.info.ax_subrole,
+            is_standard = window_state.info.is_standard,
+            is_root = window_state.info.is_root,
+            is_resizable = window_state.info.is_resizable,
+            is_minimized = window_state.info.is_minimized,
+            is_manageable,
+            chosen_space = ?active_space_for_window(reactor, &frame, server_id),
+            "RIFT_IBKR_TRACE reactor event=WindowCreated"
+        );
         reactor.window_manager.windows.insert(wid, window_state);
 
         if is_manageable {
@@ -70,6 +80,7 @@ impl WindowEventHandler {
                     reactor.process_windows_for_app_rules(wid.pid, vec![wid], app_info);
                 }
                 maybe_dispatch_window_added_in_space(reactor, wid, space);
+                let _ = reactor.update_layout_or_warn_with(false, false, "after window created");
             }
         }
         // TODO: drag state is maybe managed by ensure_active_drag
@@ -151,7 +162,7 @@ impl WindowEventHandler {
     }
 
     pub fn handle_window_deminiaturized(reactor: &mut Reactor, wid: WindowId) {
-        let (frame, server_id, is_ax_window, is_ax_root, is_ax_standard) =
+        let (frame, server_id, window_info) =
             match reactor.window_manager.windows.get_mut(&wid) {
                 Some(window) => {
                     if !window.info.is_minimized {
@@ -161,13 +172,7 @@ impl WindowEventHandler {
                     if let Some(ws_id) = window.info.sys_id {
                         reactor.window_manager.visible_windows.insert(ws_id);
                     }
-                    (
-                        window.frame_monotonic,
-                        window.info.sys_id,
-                        window.info.is_ax_window,
-                        window.info.is_root,
-                        window.info.is_standard,
-                    )
+                    (window.frame_monotonic, window.info.sys_id, window.info.clone())
                 }
                 None => {
                     debug!(
@@ -177,12 +182,8 @@ impl WindowEventHandler {
                     return;
                 }
             };
-        let is_manageable = utils::compute_window_manageability(
-            server_id,
-            false,
-            is_ax_window,
-            is_ax_root,
-            is_ax_standard,
+        let is_manageable = utils::compute_window_info_manageability(
+            &window_info,
             &reactor.window_server_info_manager.window_server_info,
         );
         if let Some(window) = reactor.window_manager.windows.get_mut(&wid) {
@@ -490,6 +491,19 @@ fn maybe_dispatch_window_added_in_space(reactor: &mut Reactor, wid: WindowId, sp
         .get(&wid)
         .map(|window| window.matches_filter(WindowFilter::EffectivelyManageable))
         .unwrap_or(false);
+    debug!(
+        ?wid,
+        ?space,
+        should_dispatch,
+        title = reactor.window_manager.windows.get(&wid).map(|w| w.info.title.as_str()),
+        is_manageable = reactor.window_manager.windows.get(&wid).map(|w| w.is_manageable),
+        ignore_app_rule = reactor
+            .window_manager
+            .windows
+            .get(&wid)
+            .map(|w| w.ignore_app_rule),
+        "RIFT_IBKR_TRACE reactor dispatch=WindowAdded"
+    );
     if should_dispatch {
         reactor.send_layout_event(LayoutEvent::WindowAdded(space, wid));
     }

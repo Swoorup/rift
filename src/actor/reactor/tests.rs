@@ -1481,6 +1481,57 @@ fn window_preserved_in_space_on_empty_discovery_without_cross_space_move() {
 }
 
 #[test]
+fn known_window_discovered_late_joins_layout_without_display_move() {
+    let mut reactor = Reactor::new_for_test(LayoutEngine::new(
+        &crate::common::config::VirtualWorkspaceSettings::default(),
+        &crate::common::config::LayoutSettings::default(),
+        None,
+    ));
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let pid: pid_t = 77;
+    let wid = WindowId::new(pid, 1);
+
+    reactor.handle_event(screen_params_event(vec![screen], vec![Some(space)], vec![]));
+
+    let mut initial = make_window(1);
+    initial.sys_id = None;
+    reactor.handle_event(Event::ApplicationLaunched {
+        pid,
+        info: AppInfo {
+            bundle_id: Some("com.test.ibkr".to_string()),
+            localized_name: Some("Test IBKR".to_string()),
+        },
+        handle: {
+            let (tx, _rx) = crate::actor::channel();
+            AppThreadHandle::new_for_test(tx)
+        },
+        is_frontmost: true,
+        main_window: Some(wid),
+        window_server_info: vec![],
+        visible_windows: vec![(wid, initial.clone())],
+    });
+
+    assert!(
+        !has_window_in_layout(&mut reactor, space, screen, wid),
+        "window should not join layout before a follow-up discovery establishes visibility"
+    );
+
+    let mut discovered = initial;
+    discovered.title = "IBKR Main".to_string();
+    reactor.handle_event(Event::WindowsDiscovered {
+        pid,
+        new: vec![(wid, discovered)],
+        known_visible: vec![wid],
+    });
+
+    assert!(
+        has_window_in_layout(&mut reactor, space, screen, wid),
+        "late discovery of an already-known window should add it to layout without a display move"
+    );
+}
+
+#[test]
 fn discovery_after_display_change_places_window_on_correct_display() {
     // End-to-end integration test: a window that physically moved to a different
     // display after a topology change (lid open/close) must end up in only the new
