@@ -961,8 +961,11 @@ fn generate_virtual_keymap() -> StdHashMap<String, KeyCode> {
     keymap
 }
 
+pub static VIRTUAL_KEYMAP: LazyLock<StdHashMap<String, KeyCode>> =
+    LazyLock::new(generate_virtual_keymap);
+
 pub fn keycode_from_char(ch: &str) -> Option<KeyCode> {
-    generate_virtual_keymap()
+    VIRTUAL_KEYMAP
         .get(&ch.to_lowercase())
         .copied()
         .or_else(|| fallback_keycode_from_char(ch))
