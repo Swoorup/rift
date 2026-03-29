@@ -58,6 +58,7 @@ pub enum Request {
     ConfigUpdated(Config),
     LayoutModesChanged(Vec<(SpaceId, crate::common::config::LayoutMode)>),
     SetLowPowerMode(bool),
+    SystemWoke,
 }
 
 pub struct EventTap {
@@ -371,6 +372,18 @@ impl EventTap {
         *self.event_mask.borrow_mut() = next_mask;
     }
 
+    fn force_rebuild_event_tap(self: &Rc<Self>) {
+        let mask = self.desired_event_mask();
+        let Some(new_tap) = self.create_tap_with_mask(mask) else {
+            warn!("Failed to recreate event tap after system wake");
+            return;
+        };
+        let old_tap = self.tap.borrow_mut().replace(new_tap);
+        drop(old_tap);
+        *self.event_mask.borrow_mut() = mask;
+        debug!("Recreated event tap after system wake");
+    }
+
     pub fn new(
         config: Config,
         events_tx: reactor::Sender,
@@ -450,6 +463,7 @@ impl EventTap {
 
     fn on_request(self: &Rc<Self>, request: Request) {
         let mut should_rebuild_mask = false;
+        let mut should_force_rebuild_tap = false;
         let mut should_update_gesture_handlers = false;
         let mut state = self.state.borrow_mut();
         match request {
@@ -573,13 +587,22 @@ impl EventTap {
                     state.last_mouse_move_timestamp = 0;
                 }
             }
+            Request::SystemWoke => {
+                // macOS sometimes invalidates event taps across sleep/wake without
+                // emitting a disable event. Recreate the tap proactively after
+                // releasing the mutable state borrow because rebuilding computes
+                // the desired event mask from state.
+                should_force_rebuild_tap = true;
+            }
         }
         drop(state);
 
         if should_update_gesture_handlers {
             self.update_gesture_handlers();
         }
-        if should_rebuild_mask {
+        if should_force_rebuild_tap {
+            self.force_rebuild_event_tap();
+        } else if should_rebuild_mask {
             self.rebuild_event_tap_mask_if_needed();
         }
     }

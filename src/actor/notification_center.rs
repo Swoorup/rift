@@ -294,6 +294,8 @@ impl NotificationCenterInner {
         let _guard = span.enter();
         if unsafe { NSWorkspaceDidDeactivateApplicationNotification } == name {
             self.send_event(WmEvent::AppGloballyDeactivated(pid));
+        } else if unsafe { NSWorkspaceDidActivateApplicationNotification } == name {
+            self.send_event(WmEvent::AppGloballyActivated(pid));
         }
     }
 
@@ -620,6 +622,12 @@ impl NotificationCenter {
             register_unsafe(
                 sel!(recvAppEvent:),
                 NSWorkspaceDidDeactivateApplicationNotification,
+                workspace_center,
+                workspace,
+            );
+            register_unsafe(
+                sel!(recvAppEvent:),
+                NSWorkspaceDidActivateApplicationNotification,
                 workspace_center,
                 workspace,
             );

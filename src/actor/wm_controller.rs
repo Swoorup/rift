@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use dispatchr::queue;
 use dispatchr::time::Time;
-use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication};
+use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 use objc2_core_foundation::CGRect;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -167,6 +167,28 @@ impl WmController {
         }
     }
 
+    fn emit_frontmost_app_activation(events_tx: &reactor::Sender) {
+        let workspace = NSWorkspace::sharedWorkspace();
+        if let Some(app) = workspace.frontmostApplication() {
+            let pid = app.pid();
+            if pid != 0 {
+                debug!(pid, "resyncing frontmost app after wake");
+                events_tx.send(reactor::Event::ApplicationGloballyActivated(pid));
+            }
+        }
+    }
+
+    fn schedule_frontmost_app_resync_after_wake(&self) {
+        const RESYNC_DELAYS_NS: [i64; 3] = [250_000_000, 1_000_000_000, 3_000_000_000];
+
+        for delay in RESYNC_DELAYS_NS {
+            let events_tx = self.events_tx.clone();
+            queue::main().after_f_s(Time::new_after(Time::NOW, delay), events_tx, |events_tx| {
+                Self::emit_frontmost_app_activation(&events_tx);
+            });
+        }
+    }
+
     #[instrument(name = "wm_controller::handle_event", skip(self))]
     pub fn handle_event(&mut self, event: WmEvent) {
         debug!("handle_event");
@@ -188,7 +210,17 @@ impl WmController {
         }
 
         match event {
-            SystemWoke => self.events_tx.send(Event::SystemWoke),
+            SystemWoke => {
+                self.events_tx.send(Event::SystemWoke);
+                self.event_tap_tx.send(event_tap::Request::SystemWoke);
+                // macOS sometimes skips app activation/deactivation notifications
+                // across sleep/wake, or reports loginwindow briefly before restoring
+                // the real frontmost app. Re-emit the current frontmost app now and
+                // shortly afterward so the reactor can clear stale login-window
+                // suppression without blindly enabling spaces while locked.
+                Self::emit_frontmost_app_activation(&self.events_tx);
+                self.schedule_frontmost_app_resync_after_wake();
+            }
             DisplayChurnBegin => self.events_tx.send(Event::DisplayChurnBegin),
             DisplayChurnEnd => self.events_tx.send(Event::DisplayChurnEnd),
             AppEventsRegistered => {

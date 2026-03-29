@@ -20,6 +20,7 @@ mod testing;
 #[cfg(test)]
 mod tests;
 
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
@@ -260,6 +261,7 @@ impl Reactor {
     pub fn spawn(
         config: Config,
         layout_engine: LayoutEngine,
+        restore_file: PathBuf,
         record: Record,
         event_tap_tx: event_tap::Sender,
         broadcast_tx: BroadcastSender,
@@ -273,6 +275,7 @@ impl Reactor {
         let mut reactor = Reactor::new(
             config,
             layout_engine,
+            restore_file,
             record,
             broadcast_tx,
             window_notify,
@@ -295,6 +298,7 @@ impl Reactor {
     pub fn new(
         config: Config,
         layout_engine: LayoutEngine,
+        restore_file: PathBuf,
         mut record: Record,
         broadcast_tx: BroadcastSender,
         window_notify: Option<(crate::actor::window_notify::Sender, WindowTxStore)>,
@@ -311,7 +315,11 @@ impl Reactor {
             config: config.clone(),
             one_space,
             app_manager: managers::AppManager::new(),
-            layout_manager: managers::LayoutManager { layout_engine },
+            layout_manager: managers::LayoutManager {
+                layout_engine,
+                restore_file,
+                save_debounce: None,
+            },
             window_manager: managers::WindowManager {
                 windows: HashMap::default(),
                 window_ids: HashMap::default(),

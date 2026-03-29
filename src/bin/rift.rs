@@ -151,10 +151,26 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
 
     let (broadcast_tx, broadcast_rx) = rift_wm::actor::channel();
 
-    let layout = LayoutEngine::new(
+    let restore_path = restore_file();
+    let mut layout = match LayoutEngine::load(
+        &restore_path,
         &config.virtual_workspaces,
         &config.settings.layout,
+    ) {
+        Ok(engine) => engine,
+        Err(e) => {
+            eprintln!("Failed to load layout state: {e}; starting fresh");
+            LayoutEngine::new(
+                &config.virtual_workspaces,
+                &config.settings.layout,
+                Some(broadcast_tx.clone()),
+            )
+        }
+    };
+    layout.apply_runtime_config(
         Some(broadcast_tx.clone()),
+        &config.settings.layout,
+        &config.virtual_workspaces,
     );
     let (event_tap_tx, event_tap_rx) = rift_wm::actor::channel();
     let (menu_tx, menu_rx) = rift_wm::actor::channel();
@@ -164,6 +180,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
     let reactor = Reactor::spawn(
         config.clone(),
         layout,
+        restore_path.clone(),
         reactor::Record::new(opt.record.as_deref()),
         event_tap_tx.clone(),
         broadcast_tx.clone(),
@@ -221,7 +238,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
     });
 
     let wm_config = wm_controller::Config {
-        restore_file: restore_file(),
+        restore_file: restore_path.clone(),
         config: config.clone(),
     };
     let (mc_tx, mc_rx) = rift_wm::actor::channel();

@@ -63,7 +63,8 @@ impl SpaceEventHandler {
             }
 
             if let Some(&wid) = reactor.window_manager.window_ids.get(&wsid) {
-                if current_spaces.is_empty() && crate::sys::window_server::get_window(wsid).is_some()
+                if current_spaces.is_empty()
+                    && crate::sys::window_server::get_window(wsid).is_some()
                 {
                     // Window exists in the window server but is reported on no spaces.
                     // This is a transient state during fullscreen transitions.
@@ -75,7 +76,11 @@ impl SpaceEventHandler {
                     if let Some(app_state) = reactor.app_manager.apps.get(&wid.pid) {
                         let _ = app_state.handle.send(Request::WindowMaybeDestroyed(wid));
                     }
-                    trace!(?wid, ?wsid, "Window exists but on no spaces; deferring destruction");
+                    trace!(
+                        ?wid,
+                        ?wsid,
+                        "Window exists but on no spaces; deferring destruction"
+                    );
                     return;
                 }
 
@@ -301,18 +306,38 @@ impl SpaceEventHandler {
             let screens = reactor.screens_for_current_spaces();
             reactor.space_activation_policy.on_spaces_updated(cfg, &screens);
 
-            reactor.recompute_and_set_active_spaces(&spaces);
-
-            // Only remap layout state during detected topology transitions once we have
+            // Remap layout state when display topology changes OR when space IDs have
+            // changed for known displays (e.g. after sleep/wake). Both conditions require
             // a complete, non-duplicated snapshot to avoid oscillation during churn.
+            //
+            // MUST run BEFORE recompute_and_set_active_spaces: that function fires
+            // SpaceExposed events which call ensure_active_for_space. If old-space
+            // layouts haven't been migrated to new space IDs yet, fresh default layouts
+            // are created and the restored state from the save file is orphaned.
             let has_duplicate_spaces = {
                 let mut unique_spaces: HashSet<SpaceId> = HashSet::default();
                 spaces.iter().flatten().any(|space| !unique_spaces.insert(*space))
             };
-            let allow_space_remap = should_trigger_topology
-                && !has_duplicate_spaces
-                && spaces.iter().all(|space| space.is_some());
+            let has_space_id_changes_for_known_display = reactor
+                .space_manager
+                .screens
+                .iter()
+                .zip(spaces.iter())
+                .any(|(screen, space_opt)| {
+                    let Some(space) = space_opt else { return false };
+                    let Some(uuid) = screen.display_uuid_opt() else {
+                        return false;
+                    };
+                    reactor.layout_manager.layout_engine.display_seen_before(uuid)
+                        && reactor.layout_manager.layout_engine.last_space_for_display_uuid(uuid)
+                            != Some(*space)
+                });
+            let allow_space_remap = (should_trigger_topology
+                || has_space_id_changes_for_known_display)
+                && !has_duplicate_spaces;
             reactor.reconcile_spaces_with_display_history(&spaces, allow_space_remap);
+
+            reactor.recompute_and_set_active_spaces(&spaces);
             if !resized_screens.is_empty() {
                 let resized_info: Vec<(SpaceId, CGSize)> = reactor
                     .space_manager
@@ -416,9 +441,11 @@ impl SpaceEventHandler {
         let screens = reactor.screens_for_spaces(&spaces);
         reactor.space_activation_policy.on_spaces_updated(cfg, &screens);
 
-        reactor.recompute_and_set_active_spaces(&spaces);
-
+        // Reconcile before recompute so SpaceExposed events see any remapped
+        // state, even though allow_remap=false for routine space switches.
         reactor.reconcile_spaces_with_display_history(&spaces, false);
+
+        reactor.recompute_and_set_active_spaces(&spaces);
         info!("space changed");
         reactor.set_screen_spaces(&spaces);
         let ws_info = reactor.authoritative_window_snapshot_for_active_spaces();

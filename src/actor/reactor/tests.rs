@@ -4,10 +4,26 @@ use test_log::test;
 use super::display_topology::TopologyState;
 use super::testing::*;
 use super::*;
-use crate::actor::app::{Request, pid_t};
+use crate::actor::app::{AppThreadHandle, Request, pid_t};
 use crate::layout_engine::{Direction, LayoutCommand, LayoutEngine, LayoutEvent};
-use crate::sys::app::WindowInfo;
+use crate::sys::app::{AppInfo, WindowInfo};
 use crate::sys::window_server::WindowServerId;
+
+fn app_launched_event(pid: pid_t, bundle_id: &str) -> Event {
+    let (tx, _rx) = crate::actor::channel();
+    Event::ApplicationLaunched {
+        pid,
+        info: AppInfo {
+            bundle_id: Some(bundle_id.to_string()),
+            localized_name: Some(bundle_id.to_string()),
+        },
+        handle: AppThreadHandle::new_for_test(tx),
+        is_frontmost: false,
+        main_window: None,
+        window_server_info: Vec::new(),
+        visible_windows: Vec::new(),
+    }
+}
 
 #[test]
 fn it_ignores_stale_resize_events() {
@@ -962,6 +978,38 @@ fn normal_macos_space_switch_does_not_arm_topology_relayout() {
     );
     assert!(reactor.is_space_active(SpaceId::new(111)));
     assert!(reactor.is_space_active(SpaceId::new(222)));
+}
+
+#[test]
+fn non_login_activation_after_wake_clears_stale_loginwindow_suppression() {
+    let mut reactor = Reactor::new_for_test(LayoutEngine::new(
+        &crate::common::config::VirtualWorkspaceSettings::default(),
+        &crate::common::config::LayoutSettings::default(),
+        None,
+    ));
+    let space = SpaceId::new(11);
+
+    reactor.handle_event(screen_params_event(
+        vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1280., 800.))],
+        vec![Some(space)],
+        vec![],
+    ));
+    assert!(reactor.is_space_active(space));
+
+    reactor.handle_event(app_launched_event(10, "com.apple.loginwindow"));
+    reactor.handle_event(Event::ApplicationGloballyActivated(10));
+    assert!(reactor.space_activation_policy.login_window_active);
+    assert!(!reactor.is_space_active(space));
+
+    reactor.handle_event(Event::SystemWoke);
+    reactor.handle_event(app_launched_event(11, "com.test.frontmost"));
+    reactor.handle_event(Event::ApplicationGloballyActivated(11));
+
+    assert!(!reactor.space_activation_policy.login_window_active);
+    assert!(
+        reactor.is_space_active(space),
+        "non-login activation after wake should re-enable active Spaces"
+    );
 }
 
 #[test]

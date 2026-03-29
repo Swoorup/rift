@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use tempfile::NamedTempFile;
@@ -77,7 +77,15 @@ pub fn replay(
     let config = ron::de::from_str(&lines.next().expect("Empty restore file")?)?;
     let layout = ron::de::from_str(&lines.next().expect("Expected layout line")?)?;
     let (broadcast_tx, _) = actor::channel();
-    let mut reactor = Reactor::new(config, layout, Record::new(None), broadcast_tx, None, false);
+    let mut reactor = Reactor::new(
+        config,
+        layout,
+        PathBuf::new(),
+        Record::new(None),
+        broadcast_tx,
+        None,
+        false,
+    );
     std::thread::spawn(move || {
         while let Some((span, request)) = rx.blocking_recv() {
             let _ = span.enter();

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Instant;
 
 use objc2_core_foundation::{CGPoint, CGRect};
@@ -187,6 +188,8 @@ pub struct RecordingManager {
 /// Manages layout engine state
 pub struct LayoutManager {
     pub layout_engine: LayoutEngine,
+    pub restore_file: PathBuf,
+    pub save_debounce: Option<std::time::Instant>,
 }
 
 pub type LayoutResult = Vec<(SpaceId, Vec<(WindowId, CGRect)>)>;
@@ -422,7 +425,24 @@ impl LayoutManager {
         }
 
         reactor.maybe_send_menu_update();
+
+        if any_frame_changed {
+            reactor.layout_manager.maybe_save_layout();
+        }
+
         Ok(any_frame_changed)
+    }
+
+    fn maybe_save_layout(&mut self) {
+        const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(5);
+        let now = std::time::Instant::now();
+        if self.save_debounce.is_some_and(|last| now.duration_since(last) < SAVE_DEBOUNCE) {
+            return;
+        }
+        self.save_debounce = Some(now);
+        if let Err(e) = self.layout_engine.save(&self.restore_file) {
+            tracing::warn!("Failed to auto-save layout: {e}");
+        }
     }
 }
 

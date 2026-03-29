@@ -18,11 +18,24 @@ impl Reactor {
         config.settings.default_disable = false;
         config.settings.animate = false;
         config.settings.focus_follows_mouse = true;
-        config.settings.layout.gaps.outer = OuterGaps { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 };
+        config.settings.layout.gaps.outer = OuterGaps {
+            top: 0.0,
+            left: 0.0,
+            bottom: 0.0,
+            right: 0.0,
+        };
         config.settings.layout.gaps.inner = InnerGaps { horizontal: 0.0, vertical: 0.0 };
         let record = Record::new_for_test(tempfile::NamedTempFile::new().unwrap());
         let (broadcast_tx, _) = actor::channel();
-        Reactor::new(config, layout, record, broadcast_tx, None, false)
+        Reactor::new(
+            config,
+            layout,
+            std::path::PathBuf::new(),
+            record,
+            broadcast_tx,
+            None,
+            false,
+        )
     }
 
     pub fn handle_events(&mut self, events: Vec<Event>) {

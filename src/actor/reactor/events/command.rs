@@ -10,7 +10,7 @@ use crate::actor::stack_line::Event as StackLineEvent;
 use crate::actor::wm_controller::WmEvent;
 use crate::actor::{menu_bar, raise_manager};
 use crate::common::collections::HashMap;
-use crate::common::config::{self as config, Config};
+use crate::common::config::Config;
 use crate::common::log::{MetricsCommand, handle_command};
 use crate::layout_engine::{EventResponse, LayoutCommand, LayoutEvent};
 use crate::sys::window_server::{self as window_server, WindowServerId};
@@ -85,6 +85,7 @@ impl CommandEventHandler {
                         .layout_engine
                         .handle_virtual_workspace_command(space, &cmd)
                 } else {
+                    warn!("Workspace command ignored: no active workspace space");
                     EventResponse::default()
                 }
             }
@@ -223,7 +224,8 @@ impl CommandEventHandler {
     }
 
     pub fn handle_command_reactor_save_and_exit(reactor: &mut Reactor) {
-        match reactor.layout_manager.layout_engine.save(config::restore_file()) {
+        let restore_file = reactor.layout_manager.restore_file.clone();
+        match reactor.layout_manager.layout_engine.save(&restore_file) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 error!("Could not save layout: {e}");

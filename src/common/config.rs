@@ -56,8 +56,7 @@ pub enum ConfigCommand {
     ReloadConfig,
 }
 
-pub fn data_dir() -> PathBuf { dirs::home_dir().unwrap().join(".rift") }
-pub fn restore_file() -> PathBuf { data_dir().join("layout.ron") }
+pub fn restore_file() -> PathBuf { std::env::temp_dir().join("rift_layout.ron") }
 pub fn config_file() -> PathBuf {
     dirs::home_dir().unwrap().join(".config").join("rift").join("config.toml")
 }

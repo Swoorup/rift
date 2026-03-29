@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::fs;
 use std::path::PathBuf;
 
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -154,9 +155,7 @@ pub struct LayoutEngine {
     layout_settings: LayoutSettings,
     #[serde(skip)]
     broadcast_tx: Option<BroadcastSender>,
-    #[serde(skip)]
     space_display_map: HashMap<SpaceId, Option<String>>,
-    #[serde(skip)]
     display_last_space: HashMap<String, SpaceId>,
 }
 
@@ -2029,15 +2028,57 @@ impl LayoutEngine {
         }
     }
 
-    pub fn load(_path: PathBuf) -> anyhow::Result<Self> {
-        Ok(Self::new(
-            &VirtualWorkspaceSettings::default(),
-            &LayoutSettings::default(),
-            None,
-        ))
+    pub fn load(
+        path: &PathBuf,
+        virtual_workspace_config: &VirtualWorkspaceSettings,
+        layout_settings: &LayoutSettings,
+    ) -> anyhow::Result<Self> {
+        match fs::read_to_string(path) {
+            Ok(contents) => match ron::from_str::<LayoutEngine>(&contents) {
+                Ok(mut engine) => {
+                    engine.layout_settings = layout_settings.clone();
+                    engine.broadcast_tx = None;
+                    info!("Restored layout state from {}", path.display());
+                    Ok(engine)
+                }
+                Err(e) => {
+                    warn!("Failed to parse layout state from {}: {e}", path.display());
+                    Ok(Self::new(virtual_workspace_config, layout_settings, None))
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                info!("No saved layout state at {}; starting fresh", path.display());
+                Ok(Self::new(virtual_workspace_config, layout_settings, None))
+            }
+            Err(e) => {
+                warn!("Failed to read layout state from {}: {e}", path.display());
+                Ok(Self::new(virtual_workspace_config, layout_settings, None))
+            }
+        }
     }
 
-    pub fn save(&self, _path: PathBuf) -> std::io::Result<()> { Ok(()) }
+    pub fn save(&self, path: &PathBuf) -> std::io::Result<()> {
+        let serialized =
+            ron::ser::to_string_pretty(&self, ron::ser::PrettyConfig::default().new_line("\n"))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, &serialized)?;
+        fs::rename(&tmp, path)?;
+        info!("Saved layout state to {}", path.display());
+        Ok(())
+    }
+
+    pub fn apply_runtime_config(
+        &mut self,
+        broadcast_tx: Option<BroadcastSender>,
+        layout_settings: &LayoutSettings,
+        virtual_workspace_settings: &VirtualWorkspaceSettings,
+    ) {
+        self.broadcast_tx = broadcast_tx;
+        self.set_layout_settings(layout_settings);
+        self.update_virtual_workspace_settings(virtual_workspace_settings);
+    }
 
     pub fn serialize_to_string(&self) -> String { ron::ser::to_string(&self).unwrap() }
 
