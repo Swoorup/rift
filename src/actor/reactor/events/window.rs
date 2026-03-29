@@ -38,8 +38,9 @@ impl WindowEventHandler {
         let is_manageable = utils::compute_window_manageability(
             window_state.info.sys_id,
             window_state.info.is_minimized,
-            window_state.info.is_standard,
+            window_state.info.is_ax_window,
             window_state.info.is_root,
+            window_state.info.is_standard,
             &reactor.window_server_info_manager.window_server_info,
         );
         window_state.is_manageable = is_manageable;
@@ -150,7 +151,7 @@ impl WindowEventHandler {
     }
 
     pub fn handle_window_deminiaturized(reactor: &mut Reactor, wid: WindowId) {
-        let (frame, server_id, is_ax_standard, is_ax_root) =
+        let (frame, server_id, is_ax_window, is_ax_root, is_ax_standard) =
             match reactor.window_manager.windows.get_mut(&wid) {
                 Some(window) => {
                     if !window.info.is_minimized {
@@ -163,8 +164,9 @@ impl WindowEventHandler {
                     (
                         window.frame_monotonic,
                         window.info.sys_id,
-                        window.info.is_standard,
+                        window.info.is_ax_window,
                         window.info.is_root,
+                        window.info.is_standard,
                     )
                 }
                 None => {
@@ -178,8 +180,9 @@ impl WindowEventHandler {
         let is_manageable = utils::compute_window_manageability(
             server_id,
             false,
-            is_ax_standard,
+            is_ax_window,
             is_ax_root,
+            is_ax_standard,
             &reactor.window_server_info_manager.window_server_info,
         );
         if let Some(window) = reactor.window_manager.windows.get_mut(&wid) {

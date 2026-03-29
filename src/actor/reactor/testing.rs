@@ -97,6 +97,7 @@ pub fn make_window(idx: usize) -> WindowInfo {
         is_root: true,
         is_minimized: false,
         is_resizable: true,
+        is_ax_window: true,
         min_size: None,
         max_size: None,
         title: format!("Window{idx}"),

@@ -1183,7 +1183,7 @@ impl Reactor {
             self.window_server_info_manager.window_server_info.insert(info.id, *info);
 
             if let Some(wid) = self.window_manager.window_ids.get(&info.id).copied() {
-                let (server_id, is_minimized, is_ax_standard, is_ax_root) =
+                let (server_id, is_minimized, is_ax_window, is_ax_root, is_ax_standard) =
                     if let Some(window) = self.window_manager.windows.get_mut(&wid) {
                         if info.layer == 0 {
                             window.frame_monotonic = info.frame;
@@ -1191,8 +1191,9 @@ impl Reactor {
                         (
                             window.info.sys_id,
                             window.info.is_minimized,
-                            window.info.is_standard,
+                            window.info.is_ax_window,
                             window.info.is_root,
+                            window.info.is_standard,
                         )
                     } else {
                         continue;
@@ -1200,8 +1201,9 @@ impl Reactor {
                 let manageable = utils::compute_window_manageability(
                     server_id,
                     is_minimized,
-                    is_ax_standard,
+                    is_ax_window,
                     is_ax_root,
+                    is_ax_standard,
                     &self.window_server_info_manager.window_server_info,
                 );
                 if let Some(window) = self.window_manager.windows.get_mut(&wid) {

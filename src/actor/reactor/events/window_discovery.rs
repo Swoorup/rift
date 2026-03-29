@@ -243,8 +243,9 @@ impl WindowDiscoveryHandler {
                     let manageable = utils::compute_window_manageability(
                         info.sys_id,
                         info.is_minimized,
-                        info.is_standard,
+                        info.is_ax_window,
                         info.is_root,
+                        info.is_standard,
                         &reactor.window_server_info_manager.window_server_info,
                     );
                     if let Some(existing) = reactor.window_manager.windows.get_mut(wid) {
@@ -253,6 +254,7 @@ impl WindowDiscoveryHandler {
                             existing.frame_monotonic = info.frame;
                         }
                         existing.info.is_standard = info.is_standard;
+                        existing.info.is_ax_window = info.is_ax_window;
                         existing.info.is_root = info.is_root;
                         existing.info.is_minimized = info.is_minimized;
                         existing.info.is_resizable = info.is_resizable;
@@ -270,8 +272,9 @@ impl WindowDiscoveryHandler {
                     let manageable = utils::compute_window_manageability(
                         state.info.sys_id,
                         state.info.is_minimized,
-                        state.info.is_standard,
+                        state.info.is_ax_window,
                         state.info.is_root,
+                        state.info.is_standard,
                         &reactor.window_server_info_manager.window_server_info,
                     );
                     state.is_manageable = manageable;
@@ -291,8 +294,9 @@ impl WindowDiscoveryHandler {
                 let manageable = utils::compute_window_manageability(
                     info.sys_id,
                     info.is_minimized,
-                    info.is_standard,
+                    info.is_ax_window,
                     info.is_root,
+                    info.is_standard,
                     &reactor.window_server_info_manager.window_server_info,
                 );
                 if let Some(existing) = reactor.window_manager.windows.get_mut(&wid) {
@@ -334,8 +338,9 @@ impl WindowDiscoveryHandler {
             let manageable = utils::compute_window_manageability(
                 state.info.sys_id,
                 state.info.is_minimized,
-                state.info.is_standard,
+                state.info.is_ax_window,
                 state.info.is_root,
+                state.info.is_standard,
                 &reactor.window_server_info_manager.window_server_info,
             );
             state.is_manageable = manageable;

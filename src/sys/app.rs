@@ -396,6 +396,8 @@ pub struct WindowInfo {
     pub is_minimized: bool,
     #[serde(default)]
     pub is_resizable: bool,
+    #[serde(default)]
+    pub is_ax_window: bool,
     pub title: String,
     #[serde(with = "CGRectDef")]
     pub frame: CGRect,
@@ -419,6 +421,7 @@ impl WindowInfo {
         let role = element.role()?;
         let subrole = element.subrole()?;
         let is_standard = role == AX_WINDOW_ROLE && subrole == AX_STANDARD_WINDOW_SUBROLE;
+        let is_ax_window = role == AX_WINDOW_ROLE;
 
         let ax_role = Some(role.clone());
         let ax_subrole = Some(subrole.clone());
@@ -431,7 +434,7 @@ impl WindowInfo {
         let is_minimized = element.minimized().unwrap_or_default();
         let is_resizable = element.can_resize().unwrap_or(true);
 
-        let (bundle_id, path) = if !is_standard {
+        let (bundle_id, path) = if !is_ax_window {
             (None, None)
         } else if let Some(info) = server_info {
             bundle_info_for_pid(info.pid)
@@ -449,6 +452,7 @@ impl WindowInfo {
             is_root: true,
             is_minimized,
             is_resizable,
+            is_ax_window,
             min_size,
             max_size,
             title: element.title().unwrap_or_default(),
