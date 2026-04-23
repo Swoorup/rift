@@ -2319,12 +2319,14 @@ impl Reactor {
             && let Some(state) = self.window_manager.windows.get(&wid)
             && let Some(wsid) = state.info.sys_id
         {
-            if require_visible_focus && !self.window_manager.visible_windows.contains(&wsid) {
+            if require_visible_focus && state.info.is_minimized {
+                tracing::debug!(?wid, ?wsid, "Dropping focus request: window is minimized");
                 focus_window = None;
             } else if !self
                 .best_space_for_window_state(state)
                 .is_some_and(|space| self.is_space_active(space))
             {
+                tracing::debug!(?wid, ?wsid, "Dropping focus request: window not on active space");
                 focus_window = None;
             }
         }
@@ -2593,11 +2595,7 @@ impl Reactor {
         if self.best_space_for_window_id(wid)? != space {
             return None;
         }
-        if window
-            .info
-            .sys_id
-            .is_some_and(|wsid| !self.window_manager.visible_windows.contains(&wsid))
-        {
+        if window.info.is_minimized {
             return None;
         }
         Some(wid)

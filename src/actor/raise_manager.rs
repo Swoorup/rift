@@ -137,7 +137,19 @@ impl RaiseManager {
                     raise_windows.len()
                 );
 
-                // Always queue the sequence
+                // Coalesce rapid simple focus requests (e.g. holding NextWindow key).
+                // A "simple focus" request has at most one raise batch and an explicit
+                // focus_window. When rapid navigation creates a backlog, only the most
+                // recent target matters.
+                let is_simple_focus = focus_window.is_some() && raise_windows.len() <= 1;
+                if is_simple_focus && !self.queued_sequences.is_empty() {
+                    debug!(
+                        "Coalescing {} queued raise sequences for rapid focus navigation",
+                        self.queued_sequences.len()
+                    );
+                    self.queued_sequences.clear();
+                }
+
                 self.queued_sequences.push_back(RaiseRequest {
                     raise_windows,
                     focus_window,
@@ -682,9 +694,11 @@ mod tests {
                 app_handles.clone(),
                 Quiet::No,
             );
+            // Use two raise windows so msg3 is not a "simple focus" and does
+            // not trigger coalescing of the queued sequences.
             let msg3 = create_layout_response(
-                vec![WindowId::new(1, 4)],
-                Some((WindowId::new(1, 5), None)),
+                vec![WindowId::new(1, 4), WindowId::new(1, 5)],
+                Some((WindowId::new(1, 6), None)),
                 app_handles.clone(),
                 Quiet::No,
             );

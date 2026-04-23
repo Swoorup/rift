@@ -51,22 +51,38 @@ impl SpaceEventHandler {
 
             return;
         } else if crate::sys::window_server::space_is_user(sid.get()) {
-            if let Some(current_space) = crate::sys::window_server::window_space(wsid)
-                && current_space != sid
-            {
+            let current_spaces = crate::sys::window_server::window_spaces(wsid);
+            if current_spaces.iter().any(|space| *space != sid) {
                 trace!(
                     ?wsid,
                     from_space = ?sid,
-                    to_space = ?current_space,
+                    to_spaces = ?current_spaces,
                     "Ignoring stale WindowServerDestroyed for window that moved spaces"
                 );
                 return;
             }
 
             if let Some(&wid) = reactor.window_manager.window_ids.get(&wsid) {
+                if current_spaces.is_empty() && crate::sys::window_server::get_window(wsid).is_some()
+                {
+                    // Window exists in the window server but is reported on no spaces.
+                    // This is a transient state during fullscreen transitions.
+                    // Let the app actor verify instead of removing immediately.
+                    //
+                    // Remove from visible_windows now so that has_window_server_visibles_without_ax
+                    // in identify_stale_windows doesn't skip stale cleanup for this pid.
+                    reactor.window_manager.visible_windows.remove(&wsid);
+                    if let Some(app_state) = reactor.app_manager.apps.get(&wid.pid) {
+                        let _ = app_state.handle.send(Request::WindowMaybeDestroyed(wid));
+                    }
+                    trace!(?wid, ?wsid, "Window exists but on no spaces; deferring destruction");
+                    return;
+                }
+
                 reactor.window_manager.window_ids.remove(&wsid);
                 reactor.window_server_info_manager.window_server_info.remove(&wsid);
                 reactor.window_manager.visible_windows.remove(&wsid);
+                reactor.window_manager.observed_window_server_ids.remove(&wsid);
                 if let Some(app_state) = reactor.app_manager.apps.get(&wid.pid) {
                     if let Err(e) = app_state.handle.send(Request::WindowMaybeDestroyed(wid)) {
                         warn!("Failed to send WindowMaybeDestroyed: {}", e);
@@ -90,9 +106,15 @@ impl SpaceEventHandler {
         wsid: WindowServerId,
         sid: SpaceId,
     ) {
-        if reactor.window_server_info_manager.window_server_info.contains_key(&wsid)
-            || reactor.window_manager.observed_window_server_ids.contains(&wsid)
-        {
+        if reactor.window_server_info_manager.window_server_info.contains_key(&wsid) {
+            reactor.window_manager.observed_window_server_ids.remove(&wsid);
+            debug!(
+                ?wsid,
+                "Received WindowServerAppeared for known window - ignoring"
+            );
+            return;
+        }
+        if reactor.window_manager.observed_window_server_ids.contains(&wsid) {
             debug!(
                 ?wsid,
                 "Received WindowServerAppeared for known window - ignoring"

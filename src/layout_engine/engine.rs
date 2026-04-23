@@ -1477,22 +1477,37 @@ impl LayoutEngine {
                         self.workspace_tree(workspace_id).visible_windows_in_layout(layout),
                     )
                 };
-                if let Some(idx) = windows.iter().position(|&w| Some(w) == self.focused_window) {
-                    let next = if forward {
-                        (idx + 1) % windows.len()
-                    } else {
-                        (idx + windows.len() - 1) % windows.len()
-                    };
-                    let response = EventResponse {
-                        focus_window: Some(windows[next]),
-                        raise_windows: vec![windows[next]],
-                        boundary_hit: None,
-                    };
-                    self.apply_focus_response(space, workspace_id, layout, &response);
-                    return response;
-                } else {
-                    EventResponse::default()
-                }
+                let idx = windows.iter().position(|&w| Some(w) == self.focused_window);
+                let next = match idx {
+                    Some(idx) => {
+                        if forward {
+                            (idx + 1) % windows.len()
+                        } else {
+                            (idx + windows.len() - 1) % windows.len()
+                        }
+                    }
+                    None if !windows.is_empty() => {
+                        // focused_window is stale (not in the current window list),
+                        // likely because a previous focus request was dropped by the
+                        // reactor after the layout engine cursor had already advanced.
+                        // Reset to the first window to self-heal the desync.
+                        debug!(
+                            ?self.focused_window,
+                            "NextWindow/PrevWindow: focused_window not in active windows; resetting cursor"
+                        );
+                        0
+                    }
+                    _ => {
+                        return EventResponse::default();
+                    }
+                };
+                let response = EventResponse {
+                    focus_window: Some(windows[next]),
+                    raise_windows: vec![windows[next]],
+                    boundary_hit: None,
+                };
+                self.apply_focus_response(space, workspace_id, layout, &response);
+                return response;
             }
             LayoutCommand::MoveFocus(direction) => {
                 debug!(

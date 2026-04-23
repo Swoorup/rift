@@ -5,7 +5,7 @@ use super::{Event, Reactor, Record, Requested, ScreenInfo, TransactionId};
 use crate::actor;
 use crate::actor::app::{AppThreadHandle, Request, WindowId};
 use crate::common::collections::BTreeMap;
-use crate::common::config::Config;
+use crate::common::config::{Config, InnerGaps, OuterGaps};
 use crate::layout_engine::LayoutEngine;
 use crate::sys::app::{AppInfo, WindowInfo, pid_t};
 use crate::sys::geometry::SameAs;
@@ -17,6 +17,9 @@ impl Reactor {
         let mut config = Config::default();
         config.settings.default_disable = false;
         config.settings.animate = false;
+        config.settings.focus_follows_mouse = true;
+        config.settings.layout.gaps.outer = OuterGaps { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 };
+        config.settings.layout.gaps.inner = InnerGaps { horizontal: 0.0, vertical: 0.0 };
         let record = Record::new_for_test(tempfile::NamedTempFile::new().unwrap());
         let (broadcast_tx, _) = actor::channel();
         Reactor::new(config, layout, record, broadcast_tx, None, false)

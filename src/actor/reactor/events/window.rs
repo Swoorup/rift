@@ -52,6 +52,9 @@ impl WindowEventHandler {
         }
 
         let server_id = window_state.info.sys_id;
+        if let Some(wsid) = server_id {
+            reactor.window_manager.visible_windows.insert(wsid);
+        }
         reactor.window_manager.windows.insert(wid, window_state);
 
         if is_manageable {
@@ -154,6 +157,9 @@ impl WindowEventHandler {
                         return;
                     }
                     window.info.is_minimized = false;
+                    if let Some(ws_id) = window.info.sys_id {
+                        reactor.window_manager.visible_windows.insert(ws_id);
+                    }
                     (
                         window.frame_monotonic,
                         window.info.sys_id,
