@@ -429,13 +429,17 @@ impl StackLine {
         indicator
     }
 
-    // TODO: We should just pass in the coordinates from the layout calculation.
+    /// Positional placement must match the layout engine's `adjust_stack_container_rect`
+    /// which reserves space on the side indicated by `HorizontalPlacement` /
+    /// `VerticalPlacement`. If they disagree, the indicator bar is drawn in the
+    /// wrong gutter (or bleeds into adjacent windows) while the reserved area
+    /// sits empty.
     fn calculate_indicator_frame(
         group_frame: CGRect,
         group_kind: GroupKind,
         thickness: f64,
-        _horizontal_placement: HorizontalPlacement,
-        _vertical_placement: VerticalPlacement,
+        horizontal_placement: HorizontalPlacement,
+        vertical_placement: VerticalPlacement,
         spacing: f64,
     ) -> CGRect {
         let min_size = thickness * 2.0;
@@ -443,14 +447,30 @@ impl StackLine {
         let adjusted_height = group_frame.size.height.max(min_size);
 
         match group_kind {
-            GroupKind::Horizontal => CGRect::new(
-                CGPoint::new(group_frame.origin.x, group_frame.origin.y - spacing),
-                CGSize::new(adjusted_width, thickness),
-            ),
-            GroupKind::Vertical => CGRect::new(
-                CGPoint::new(group_frame.origin.x - spacing, group_frame.origin.y),
-                CGSize::new(thickness, adjusted_height),
-            ),
+            GroupKind::Horizontal => {
+                let y = match horizontal_placement {
+                    HorizontalPlacement::Top => group_frame.origin.y - spacing,
+                    HorizontalPlacement::Bottom => {
+                        group_frame.origin.y + group_frame.size.height - thickness + spacing
+                    }
+                };
+                CGRect::new(
+                    CGPoint::new(group_frame.origin.x, y),
+                    CGSize::new(adjusted_width, thickness),
+                )
+            }
+            GroupKind::Vertical => {
+                let x = match vertical_placement {
+                    VerticalPlacement::Left => group_frame.origin.x - spacing,
+                    VerticalPlacement::Right => {
+                        group_frame.origin.x + group_frame.size.width - thickness + spacing
+                    }
+                };
+                CGRect::new(
+                    CGPoint::new(x, group_frame.origin.y),
+                    CGSize::new(thickness, adjusted_height),
+                )
+            }
         }
     }
 

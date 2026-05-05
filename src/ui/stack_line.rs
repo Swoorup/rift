@@ -142,6 +142,7 @@ impl GroupIndicatorWindow {
         ));
 
         let cgs_window = CgsWindow::new(frame)?;
+        cgs_window.set_shape(frame)?;
         if let Err(err) = cgs_window.set_opacity(false) {
             warn!(error=?err, "failed to set stack line window opacity");
         }
@@ -151,8 +152,6 @@ impl GroupIndicatorWindow {
         if let Err(err) = cgs_window.set_level(NSNormalWindowLevel as i32) {
             warn!(error=?err, "failed to set stack line window level");
         }
-        // Disable the system window shadow so that macOS does not draw a
-        // drop-shadow around the indicator when it sits between tiled windows.
         if let Err(err) = cgs_window.set_tags(1 << 3) {
             warn!(error=?err, "failed to disable stack line window shadow");
         }
