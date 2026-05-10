@@ -49,12 +49,19 @@ pub struct RaiseManager {
 #[derive(Debug)]
 struct ActiveSequence {
     sequence_id: u64,
+    phase: RaisePhase,
     pending_raises: HashSet<WindowId>,
     focus_batch: Option<(pid_t, Vec<WindowId>, Option<CGPoint>, Quiet)>,
     app_handles: HashMap<i32, AppThreadHandle>,
     raise_token: CancellationToken,
     started_at: Instant,
     timed_out: bool,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum RaisePhase {
+    Raising,
+    Focusing,
 }
 
 pub type Sender = actor::Sender<Event>;
@@ -173,12 +180,28 @@ impl RaiseManager {
                 // Clear pending raises for the active sequence if it matches
                 if let Some(sequence) = &mut self.active_sequence {
                     if sequence.sequence_id == sequence_id {
-                        warn!(
-                            "Sequence {} timed out, clearing pending raises: {:?}",
-                            sequence_id, sequence.pending_raises
-                        );
-                        sequence.pending_raises.clear();
-                        sequence.raise_token.cancel();
+                        match sequence.phase {
+                            RaisePhase::Raising => {
+                                warn!(
+                                    "Sequence {} timed out while raising, clearing pending raises and preserving focus: {:?}",
+                                    sequence_id, sequence.pending_raises
+                                );
+                                sequence.pending_raises.clear();
+                                sequence.raise_token.cancel();
+                                sequence.raise_token = CancellationToken::new();
+                                sequence.started_at = Instant::now();
+                                sequence.timed_out = false;
+                            }
+                            RaisePhase::Focusing => {
+                                warn!(
+                                    "Sequence {} timed out while focusing, abandoning focus request: {:?}",
+                                    sequence_id, sequence.pending_raises
+                                );
+                                sequence.pending_raises.clear();
+                                sequence.focus_batch = None;
+                                sequence.raise_token.cancel();
+                            }
+                        }
                     }
                 }
             }
@@ -262,6 +285,7 @@ impl RaiseManager {
         if !pending_raises.is_empty() || focus_batch.is_some() {
             self.active_sequence = Some(ActiveSequence {
                 sequence_id,
+                phase: RaisePhase::Raising,
                 pending_raises,
                 focus_batch,
                 app_handles,
@@ -288,6 +312,9 @@ impl RaiseManager {
             debug!(focus_window = ?wids);
             let app_handle = sequence.app_handles.get(&pid);
             if let Some(handle) = app_handle {
+                sequence.phase = RaisePhase::Focusing;
+                sequence.started_at = Instant::now();
+                sequence.timed_out = false;
                 if handle
                     .send(Request::Raise(
                         wids.clone(),
@@ -388,6 +415,22 @@ mod tests {
                 *wid == vec![expected_wid] && *quiet == Quiet::No
             } else {
                 false
+            }
+        })
+    }
+
+    fn focus_raise_token(
+        requests: &[Request],
+        expected_wid: WindowId,
+    ) -> Option<CancellationToken> {
+        requests.iter().find_map(|r| {
+            if let Request::Raise(wid, token, _, quiet) = r
+                && *wid == vec![expected_wid]
+                && *quiet == Quiet::No
+            {
+                Some(token.clone())
+            } else {
+                None
             }
         })
     }
@@ -567,11 +610,13 @@ mod tests {
             // Send timeout for the sequence
             raise_manager.handle_message(Event::RaiseTimeout { sequence_id: 1 });
 
-            // Check that focus window request was sent after timeout
+            // Check that focus window request was sent after timeout with a fresh token.
             let requests = collect_requests(&mut app_rx);
+            let focus_token = focus_raise_token(&requests, WindowId::new(1, 3))
+                .expect("Focus window request should have been sent after timeout");
             assert!(
-                find_raise_request(&requests, WindowId::new(1, 3)),
-                "Focus window request should have been sent after timeout"
+                !focus_token.is_cancelled(),
+                "Focus request after a pre-focus timeout must not inherit the cancelled raise token"
             );
 
             // Complete the focus window raise
@@ -582,6 +627,44 @@ mod tests {
 
             // Verify that the sequence was completed and removed
             assert!(raise_manager.active_sequence.is_none());
+        });
+    }
+
+    #[test]
+    fn test_timeout_while_focusing_clears_active_sequence() {
+        Executor::run(async {
+            let mut raise_manager = RaiseManager::new();
+            let (app_handles, mut app_rx) = create_test_app_handles();
+
+            let layout_msg = create_layout_response(
+                vec![WindowId::new(1, 1)],
+                Some((WindowId::new(1, 2), None)),
+                app_handles,
+                Quiet::No,
+            );
+
+            raise_manager.handle_message(layout_msg);
+            raise_manager.handle_message(Event::RaiseCompleted {
+                window_id: WindowId::new(1, 1),
+                sequence_id: 1,
+            });
+
+            let requests = collect_requests(&mut app_rx);
+            assert!(
+                find_raise_request(&requests, WindowId::new(1, 2)),
+                "Focus window request should have been sent"
+            );
+            assert_eq!(
+                raise_manager.active_sequence.as_ref().map(|s| s.phase),
+                Some(RaisePhase::Focusing)
+            );
+
+            raise_manager.handle_message(Event::RaiseTimeout { sequence_id: 1 });
+
+            assert!(
+                raise_manager.active_sequence.is_none(),
+                "Focus timeout should not leave the raise manager stuck"
+            );
         });
     }
 
